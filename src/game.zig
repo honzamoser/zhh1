@@ -8,18 +8,14 @@ fn Game(comptime size: usize) type {
         fields: [size * size]u8,
         seed: u64,
         prng: std.Random.DefaultPrng,
-        random: std.Random,
 
         pub fn init(seed: u64) Game(size) {
             // zig fmt: off
 
-            var prng: std.Random.DefaultPrng = .init(seed);
-
             return Game(size){     
-                .fields = undefined, 
+                .fields = @splat(0), 
                 .seed = seed, 
-                .prng = prng,
-                .random = prng.random()
+                .prng = .init(seed)
             };
             // zig fmt: on
         }
@@ -232,8 +228,8 @@ fn Game(comptime size: usize) type {
 
         pub fn is_solved(self: *Game(size), field: *[size * size]u8) !bool {
             _ = self;
-            for (field) |value| {
-                if (value == 0) {
+            for (0..field.len) |value| {
+                if (field[value] != 1 and field[value] != 2) {
                     return false;
                 }
             }
@@ -537,7 +533,7 @@ fn Game(comptime size: usize) type {
                 if (count[0] == 2) {
                     for (0..self.game_size - 1) |ccid| {
                         const current_col = if (ccid >= cid) ccid + 1 else ccid;
-                        const check_col_slice = self.pick_column(ccid, fields);
+                        const check_col_slice = self.pick_column(current_col, fields);
                         const current_count = self.count_slice(&check_col_slice);
 
                         if (current_count[0] > 0) continue;
@@ -609,24 +605,28 @@ fn Game(comptime size: usize) type {
             var fail_row: usize = 0;
             var solver_message: [:0]const u8 = "";
 
+            var prev_index = size + 1;
+
             var guess_state: [size * size]u8 = undefined;
             @memcpy(&guess_state, fields);
 
-            while (!try self.is_solved(fields)) : (if (!try self.verify(fields)) {
+            while (!try self.is_solved(fields)) : (if (self.verify(fields)) |_| {
+                // std.debug.print("Reverting last guess \n", .{});
+            } else |e| {
+                std.debug.print("{}\n", .{e});
                 ch = self.opposite(ch);
                 @memcpy(fields, &guess_state);
                 fail_row += 1;
-                std.debug.print("Reverting last guess \n", .{});
             }) {
                 last_state = self.map_hash(fields);
 
-                if (fail_row > 3) {
-                    std.debug.print("Failed more than 3 times in a row. Unsolvable layout?\n", .{});
+                if (fail_row > 8) {
+                    // std.debug.print("Failed more than 3 times in a row. Unsolvable layout?\n", .{});
                     return false;
                 }
 
-                std.debug.print("---------------------- {d} - {s}\n", .{ last_state, solver_message });
-                _ = try self.print_fields(fields);
+                // std.debug.print("---------------------- {d} - {s}\n", .{ last_state, solver_message });
+                // _ = try self.print_fields(fields);
                 solver_message = "";
                 // RULE 1: Search for a finished quota; eg. where red = N/2 or blue = N/2
                 if (self.solve_quota(fields)) {
@@ -656,6 +656,11 @@ fn Game(comptime size: usize) type {
                 var highest_indexes_count: usize = 0;
                 var highest_indexes: [16]usize = undefined;
                 for (self.generate_heuristics(fields), 0..std.math.pow(usize, size, 2)) |field, i| {
+                    if (i == prev_index) continue;
+
+                    // std.debug.print("{d} ", .{field});
+                    // if (i % size == 0) std.debug.print("\n", .{});
+
                     if (field > highest_val) {
                         highest_val = field;
                         highest_indexes[0] = i;
@@ -670,19 +675,20 @@ fn Game(comptime size: usize) type {
 
                 // For now, always set it to 1(O)
                 @memcpy(&guess_state, fields);
-                const selected_field = self.random.intRangeAtMost(usize, 0, highest_indexes_count - 1);
+                const selected_field = self.prng.random().intRangeAtMost(usize, 0, highest_indexes_count - 1);
                 fields[highest_indexes[selected_field]] = ch;
+                prev_index = selected_field;
 
                 solver_message = "Solved by guessing";
 
                 if (last_state == self.map_hash(fields)) {
-                    std.debug.print("No change deteceted, exiting... \n", .{});
+                    // std.debug.print("No change deteceted, exiting... \n", .{});
                     break;
                 }
             }
 
-            std.debug.print("--------FINAL--------- {d}\n", .{self.map_hash(fields)});
-            _ = try self.print_fields(fields);
+            // std.debug.print("--------FINAL--------- {d}\n", .{self.map_hash(fields)});
+            // _ = try self.print_fields(fields);
             return true;
         }
 
@@ -695,18 +701,15 @@ fn Game(comptime size: usize) type {
 
         pub fn verify(self: *Game(size), fields: *[size * size]u8) !bool {
             if (!try self.verify_count_rule(fields)) {
-                std.debug.print("More than 2 tiles next to each other! Fail\n", .{});
-                return false;
+                return error.count;
             }
 
             if (!try self.verify_balance_rule(fields)) {
-                std.debug.print("More than N/2 tiles in a row or column! Fail\n", .{});
-                return false;
+                return error.balance;
             }
 
             if (!try self.verify_no_duplicates(fields)) {
-                std.debug.print("More than 1 instance of a row or column! Fail\n", .{});
-                return false;
+                return error.duplicate;
             }
 
             return true;
@@ -721,13 +724,11 @@ fn Game(comptime size: usize) type {
             var work_fields: [std.math.pow(usize, size, 2)]u8 = undefined;
             @memcpy(&work_fields, fields);
 
-            const random_offset = self.random.intRangeAtMost(usize, 0, self.game_size);
+            const random_offset = self.prng.random().intRangeAtMost(usize, 0, self.game_size);
             // const random_offset = 0;
 
             // const removed_fields_amt = 0;
             // const removed_fields: [size * size]u8 = undefined;
-
-            std.debug.print("Carving...\n", .{});
 
             for (0..self.game_size * self.game_size) |value| {
                 const i = (value + random_offset) % (self.game_size * self.game_size);
@@ -773,17 +774,20 @@ pub fn fmt_row(input: []const u8, out_buf: []u8) !void {
 }
 
 test "Create a game and check its size" {
-    const MyGame = Game(6);
-    const game: MyGame = MyGame.init(12);
-    try std.testing.expect(game.game_size == 4);
-    try std.testing.expect(game.fields.len == std.math.pow(usize, 4, 2));
+    const size = 10;
+    const MyGame = Game(size);
+    var game: MyGame = MyGame.init(21);
+    try std.testing.expect(game.game_size == size);
+    try std.testing.expect(game.fields.len == std.math.pow(usize, size, 2));
+
+    try game.print_fields(&game.fields);
 }
 
 test "Create a game and populate its fields" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
-    try game.print_fields();
+    try game.print_fields(&game.fields);
 
     // Add assertions to check the generated fields
 }
@@ -792,7 +796,7 @@ test "Verify count rule" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
-    const is_count_valid = game.verify_count_rule() catch |err| {
+    const is_count_valid = game.verify_count_rule(&game.fields) catch |err| {
         std.debug.print("Error verifying count rule: {s}\n", .{err});
         return;
     };
@@ -803,7 +807,7 @@ test "Verify balance rule" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
-    const is_balance_valid = game.verify_balance_rule() catch |err| {
+    const is_balance_valid = game.verify_balance_rule(&game.fields) catch |err| {
         std.debug.print("Error verifying balance rule: {s}\n", .{err});
         return;
     };
@@ -814,7 +818,7 @@ test "Verify no duplicates rule" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
-    const is_no_duplicates_valid = game.verify_no_duplicates() catch |err| {
+    const is_no_duplicates_valid = game.verify_no_duplicates(&game.fields) catch |err| {
         std.debug.print("Error verifying no duplicates rule: {}\n", .{err});
         return;
     };
@@ -823,18 +827,29 @@ test "Verify no duplicates rule" {
 
 test "Solve with guessing" {
     const io = std.testing.io;
+    const size = 6;
 
     // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
     const now = std.Io.Clock.Timestamp.now(io, .real);
     const secs = now.raw.toMicroseconds();
 
-    const MyGame = Game(6);
-    var game: MyGame = MyGame.init(@intCast(secs));
-    try game.test_field();
-    _ = try game.solve(&game.fields);
-    const success = try game.verify(&game.fields);
+    const MyGame = Game(size);
+    var game: MyGame = MyGame.init((@as(u64, @intCast(secs))) % 1000);
 
+    var completed = false;
+
+    while (!completed) {
+        completed = try game.solve(&game.fields);
+    }
+
+    const success = try game.verify(&game.fields);
+    const complete = try game.is_solved(&game.fields);
+
+    try game.print_fields(&game.fields);
+
+    try std.testing.expect(completed);
     try std.testing.expect(success);
+    try std.testing.expect(complete);
 }
 
 test "Solve without guessing" {
@@ -892,7 +907,7 @@ test "Heuristic" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
-    try game.print_fields();
+    try game.print_fields(&game.fields);
 
-    _ = game.generate_heuristics();
+    _ = game.generate_heuristics(&game.fields);
 }

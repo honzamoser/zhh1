@@ -3,69 +3,59 @@ const Io = std.Io;
 
 const zhh1 = @import("zhh1");
 
+const intro = @embedFile("./splash");
+
+var terminal_width: usize = 0;
+var terminal_height: usize = 0;
+
 pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var buf: std.posix.winsize = undefined;
+    try switch (std.posix.errno(
+        std.posix.system.ioctl(
+            std.Io.File.stdout().handle,
+            std.posix.T.IOCGWINSZ,
+            @intFromPtr(&buf),
+        ),
+    )) {
+        .SUCCESS => {
+            terminal_width = buf.col;
+            terminal_height = buf.row;
+        },
+        else => error.IoctlError,
+    };
 
-    // This is appropriate for anything that lives as long as the process.
-    const arena: std.mem.Allocator = init.arena.allocator();
+    // _ = init;
 
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
+    var buffer: [1024]u8 = undefined;
+    var buffered = std.Io.File.stdout().writerStreaming(init.io, &buffer);
+    const interface = &buffered.interface;
+
+    try print_title(interface, init.gpa);
+}
+
+fn print_title(interface: *std.Io.Writer, allocator: std.mem.Allocator) !void {
+    try interface.writeAll("\x1b[0m\x1b[1m");
+
+    var iter = std.mem.splitAny(u8, intro, "\n");
+    const title_offset = offset(terminal_width, iter.peek().?.len, allocator);
+
+    var i: u16 = 0;
+    while (iter.next()) |l| {
+        try interface.print("\x1b[{d}m{s}{s}\n", .{ (31 + i % 4), title_offset, l });
+        i += 1;
     }
 
-    // In order to do I/O operations need an `Io` instance.
-    const io = init.io;
+    allocator.free(title_offset);
 
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
-
-    try zhh1.printAnotherMessage(stdout_writer);
-
-    try stdout_writer.flush(); // Don't forget to flush!
+    try interface.flush();
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
-
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try command `zig build test --fuzz -Doptimize=ReleaseFast` to see if it manages to fail this test case!
-
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
-        },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
-        },
-    };
+inline fn offset(width: usize, content_size: usize, allocator: std.mem.Allocator) []const u8 {
+    if (allocator.alloc(u8, width / 2 - content_size / 2)) |buf| {
+        @memset(buf, 0x20);
+        return buf;
+    } else |e| {
+        std.debug.print("{}", .{e});
+        @panic("Out of memory");
+    }
 }
