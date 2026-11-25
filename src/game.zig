@@ -7,12 +7,19 @@ fn Game(comptime size: usize) type {
         game_size: usize = size,
         fields: [size * size]u8,
         seed: u64,
+        prng: std.Random.DefaultPrng,
+        random: std.Random,
 
         pub fn init(seed: u64) Game(size) {
             // zig fmt: off
+
+            var prng: std.Random.DefaultPrng = .init(seed);
+
             return Game(size){     
                 .fields = undefined, 
-                .seed = seed 
+                .seed = seed, 
+                .prng = prng,
+                .random = prng.random()
             };
             // zig fmt: on
         }
@@ -21,14 +28,7 @@ fn Game(comptime size: usize) type {
 
         pub fn test_field(self: *Game(size)) !void {
             // zig fmt: off
-            self.*.fields = [_]u8 {
-                0,0,2,0,0,0,
-                0,0,2,0,0,0,
-                0,0,0,0,0,0,
-                1,0,0,0,0,1,
-                0,0,0,0,2,0,
-                2,0,0,0,0,0
-            };
+            self.*.fields = @splat(0);
             // zig fmt: on
 
             // const is_count_valid = self.verify_count_rule() catch |err| {
@@ -245,14 +245,59 @@ fn Game(comptime size: usize) type {
         fn generate_heuristics(self: *Game(size)) [size * size]u8 {
             // For now, just adjacency bonus
             var heuristics: [size * size]u8 = undefined;
+            // Add +1 to fields that have a occupied field next to them
             for (0..size * size) |i| {
                 heuristics[i] = 0;
+
+                if (self.fields[i] != 0) continue;
 
                 if (self.fields[i] == 0) {
                     if (self.has_adjacent(i)) heuristics[i] += 1;
                 }
             }
+            // Add +1 to the row or column for each occupied field -> XX__ = +2 for each
+            // Row first
+            // for (0..self.game_size) |rid| {
+            //     const row_slice = self.fields[rid * self.game_size .. self.game_size * (rid + 1)];
+            //     const count = self.count_slice(row_slice);
+
+            //     const point_addition: u8 = @intCast(count[1] + count[2]);
+
+            //     for (0..self.game_size) |cid| {
+            //         if (row_slice[cid] == 0) {
+            //             heuristics[rid * self.game_size + cid] += point_addition;
+            //         }
+            //     }
+            // }
+
+            // Next columns
+            for (0..self.game_size) |cid| {
+                const col_slice = self.pick_column(cid);
+                const count = self.count_slice(col_slice[0..self.game_size]);
+
+                const point_addition: u8 = @intCast(count[1] + count[2]);
+                if (point_addition == 0) continue;
+                // std.debug.print("{d}", .{point_addition});
+
+                for (0..self.game_size) |rid| {
+                    if (col_slice[rid] == 0) {
+                        heuristics[rid * self.game_size + cid] += point_addition;
+                    }
+                }
+            }
+            self.print_heuristic(heuristics);
             return heuristics;
+        }
+
+        fn print_heuristic(self: *Game(size), heuristic: [size * size]u8) void {
+            // _ = self;
+            for (heuristic, 0..) |field, i| {
+                if (i > 0 and i % self.game_size == 0) {
+                    std.debug.print("\n", .{});
+                }
+
+                std.debug.print("{d}", .{field});
+            }
         }
 
         fn has_adjacent(self: *Game(size), index: usize) bool {
@@ -471,17 +516,28 @@ fn Game(comptime size: usize) type {
                 if (self.solve_sandwich()) continue;
 
                 var highest_val: usize = 0;
-                var highest_index: usize = 0;
+                var highest_indexes_count: usize = 0;
+                var highest_indexes: [16]usize = undefined;
                 for (self.generate_heuristics(), 0..std.math.pow(usize, size, 2)) |field, i| {
                     if (field > highest_val) {
                         highest_val = field;
-                        highest_index = i;
+                        highest_indexes[0] = i;
+                        highest_indexes_count = 1;
+                    }
+
+                    if (field == highest_val and highest_indexes_count < 16) {
+                        highest_indexes[highest_indexes_count] = i;
+                        highest_indexes_count += 1;
                     }
                 }
 
                 // For now, always set it to 1(O)
                 @memcpy(&guess_state, &self.fields);
-                self.fields[highest_index] = ch;
+                const selected_field = self.random.intRangeAtMost(usize, 0, highest_indexes_count - 1);
+                self.fields[highest_indexes[selected_field]] = ch;
+
+                print_usize_slice(highest_indexes[0..]);
+                std.debug.print("{d}", .{selected_field});
 
                 if (last_state == self.map_state()) {
                     std.debug.print("No change deteceted, exiting... \n", .{});
@@ -523,6 +579,14 @@ fn Game(comptime size: usize) type {
     };
 }
 
+fn print_usize_slice(slice: []const usize) void {
+    std.debug.print("SLICE: [", .{});
+    for (slice) |value| {
+        std.debug.print("{d}, ", .{value});
+    }
+    std.debug.print("]", .{});
+}
+
 fn print_slice(slice: []const u8) void {
     std.debug.print("SLICE: [", .{});
     for (slice) |value| {
@@ -539,14 +603,14 @@ pub fn fmt_row(input: []const u8, out_buf: []u8) !void {
 }
 
 test "Create a game and check its size" {
-    const MyGame = Game(4);
+    const MyGame = Game(6);
     const game: MyGame = MyGame.init(12);
     try std.testing.expect(game.game_size == 4);
     try std.testing.expect(game.fields.len == std.math.pow(usize, 4, 2));
 }
 
 test "Create a game and populate its fields" {
-    const MyGame = Game(4);
+    const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
     try game.print_fields();
@@ -555,7 +619,7 @@ test "Create a game and populate its fields" {
 }
 
 test "Verify count rule" {
-    const MyGame = Game(4);
+    const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
     const is_count_valid = game.verify_count_rule() catch |err| {
@@ -566,7 +630,7 @@ test "Verify count rule" {
 }
 
 test "Verify balance rule" {
-    const MyGame = Game(4);
+    const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
     const is_balance_valid = game.verify_balance_rule() catch |err| {
@@ -577,7 +641,7 @@ test "Verify balance rule" {
 }
 
 test "Verify no duplicates rule" {
-    const MyGame = Game(4);
+    const MyGame = Game(6);
     var game: MyGame = MyGame.init(12);
     try game.test_field();
     const is_no_duplicates_valid = game.verify_no_duplicates() catch |err| {
@@ -588,8 +652,14 @@ test "Verify no duplicates rule" {
 }
 
 test "Solve" {
+    const io = std.testing.io;
+
+    // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
+    const now = std.Io.Clock.Timestamp.now(io, .real);
+    const secs = now.raw.toMicroseconds();
+
     const MyGame = Game(6);
-    var game: MyGame = MyGame.init(12);
+    var game: MyGame = MyGame.init(@intCast(secs));
     try game.test_field();
     try game.solve();
     const success = try game.verify();
@@ -598,8 +668,18 @@ test "Solve" {
 }
 
 test "Opposite" {
+    var MyGame = Game(6).init(12);
     const test_1: u8 = 1;
     const test_2: u8 = 2;
-    try std.testing.expect(Game(4).opposite(test_1) == test_2);
-    try std.testing.expect(Game(4).opposite(test_2) == test_1);
+    try std.testing.expect(MyGame.opposite(test_1) == test_2);
+    try std.testing.expect(MyGame.opposite(test_2) == test_1);
+}
+
+test "Heuristic" {
+    const MyGame = Game(6);
+    var game: MyGame = MyGame.init(12);
+    try game.test_field();
+    try game.print_fields();
+
+    _ = game.generate_heuristics();
 }
