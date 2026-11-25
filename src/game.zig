@@ -49,9 +49,9 @@ fn Game(comptime size: usize) type {
             // std.debug.print("{s}\n", .{if (is_no_duplicates_valid) "No duplicates rule is valid" else "No duplicates rule is invalid"});
         }
 
-        pub fn print_fields(self: *Game(size)) !void {
-            for (self.fields, 0..) |field, index| {
-                const value: u8 = if (field == 1) 'O' else if (field == 2) 'X' else '_';
+        pub fn print_fields(self: *Game(size), field: *[size * size]u8) !void {
+            for (field, 0..) |_field, index| {
+                const value: u8 = if (_field == 1) 'O' else if (_field == 2) 'X' else '_';
                 std.debug.print("{c} ", .{value});
                 if ((index + 1) % self.game_size == 0) {
                     std.debug.print("\n", .{});
@@ -59,7 +59,7 @@ fn Game(comptime size: usize) type {
             }
         }
 
-        fn verify_count_rule(self: *Game(size)) !bool {
+        fn verify_count_rule(self: *Game(size), field: *[size * size]u8) !bool {
 
             // Check rows
             for (0..self.game_size) |row_index| {
@@ -67,7 +67,7 @@ fn Game(comptime size: usize) type {
                 var last_value: u8 = 0;
                 for (0..self.game_size) |col_index| {
                     const index = row_index * self.game_size + col_index;
-                    const value = self.fields[index];
+                    const value = field[index];
 
                     if (value == last_value) {
                         in_series += 1;
@@ -87,7 +87,7 @@ fn Game(comptime size: usize) type {
                 var last_value: u8 = 0;
                 for (0..self.game_size) |row_index| {
                     const index = row_index * self.game_size + col_index;
-                    const value = self.fields[index];
+                    const value = field[index];
 
                     if (value == last_value) {
                         in_series += 1;
@@ -104,7 +104,7 @@ fn Game(comptime size: usize) type {
             return true;
         }
 
-        fn verify_balance_rule(self: *Game(size)) !bool {
+        fn verify_balance_rule(self: *Game(size), field: *[size * size]u8) !bool {
             // Check rows
             for (0..self.game_size) |row_index| {
                 var total_1: u16 = 0;
@@ -112,7 +112,7 @@ fn Game(comptime size: usize) type {
 
                 for (0..self.game_size) |col_index| {
                     const index = row_index * self.game_size + col_index;
-                    const value = self.fields[index];
+                    const value = field[index];
 
                     if (value == 1) {
                         total_1 += 1;
@@ -130,7 +130,7 @@ fn Game(comptime size: usize) type {
                 var total_2: u16 = 0;
                 for (0..self.game_size) |row_index| {
                     const index = row_index * self.game_size + col_index;
-                    const value = self.fields[index];
+                    const value = field[index];
 
                     if (value == 1) {
                         total_1 += 1;
@@ -145,14 +145,14 @@ fn Game(comptime size: usize) type {
             return true;
         }
 
-        fn verify_no_duplicates(self: *Game(size)) !bool {
+        fn verify_no_duplicates(self: *Game(size), field: *[size * size]u8) !bool {
             // Check rows
             for (0..self.game_size) |row_index| {
-                const current_row = self.fields[row_index * self.game_size .. (row_index + 1) * self.game_size];
+                const current_row = field[row_index * self.game_size .. (row_index + 1) * self.game_size];
 
                 for (0..self.game_size - 1) |i| {
                     const check_row_id: usize = if (i >= row_index) i + 1 else i;
-                    const check_row = self.fields[check_row_id * self.game_size .. (check_row_id + 1) * self.game_size];
+                    const check_row = field[check_row_id * self.game_size .. (check_row_id + 1) * self.game_size];
                     if (try recurse_compare_rows(current_row[0..], check_row[0..], null)) {
                         return false;
                     }
@@ -161,14 +161,14 @@ fn Game(comptime size: usize) type {
 
             // Check columns
             for (0..self.game_size) |col_index| {
-                const current_row = self.pick_column(col_index);
+                const current_row = self.pick_column(col_index, field);
 
                 var format_buf: [size]u8 = undefined;
                 try fmt_row(current_row[0..], &format_buf);
 
                 for (0..self.game_size - 1) |i| {
                     const check_row_id: usize = if (i >= col_index) i + 1 else i;
-                    const check_row = self.pick_column(check_row_id);
+                    const check_row = self.pick_column(check_row_id, field);
 
                     try fmt_row(check_row[0..], &format_buf);
 
@@ -181,11 +181,11 @@ fn Game(comptime size: usize) type {
             return true;
         }
 
-        fn pick_column(self: *Game(size), col_index: usize) [size]u8 {
+        fn pick_column(self: *Game(size), col_index: usize, field: *[size * size]u8) [size]u8 {
             var column: [size]u8 = undefined;
             for (0..self.game_size) |row_index| {
                 const index = row_index * self.game_size + col_index;
-                column[row_index] = self.fields[index];
+                column[row_index] = field[index];
             }
 
             // Return the value of the column - we don't slice the game data array, because we want to sample columns and slices
@@ -220,9 +220,10 @@ fn Game(comptime size: usize) type {
             return try recurse_compare_rows(row1, row2, index + 1);
         }
 
-        pub fn is_solved(self: *Game(size)) !bool {
-            for (self.fields) |field| {
-                if (field == 0) {
+        pub fn is_solved(self: *Game(size), field: *[size * size]u8) !bool {
+            _ = self;
+            for (field) |value| {
+                if (value == 0) {
                     return false;
                 }
             }
@@ -242,37 +243,37 @@ fn Game(comptime size: usize) type {
             return out;
         }
 
-        fn generate_heuristics(self: *Game(size)) [size * size]u8 {
+        fn generate_heuristics(self: *Game(size), fields: *[size * size]u8) [size * size]u8 {
             // For now, just adjacency bonus
             var heuristics: [size * size]u8 = undefined;
             // Add +1 to fields that have a occupied field next to them
             for (0..size * size) |i| {
                 heuristics[i] = 0;
 
-                if (self.fields[i] != 0) continue;
+                if (fields[i] != 0) continue;
 
-                if (self.fields[i] == 0) {
-                    if (self.has_adjacent(i)) heuristics[i] += 1;
+                if (fields[i] == 0) {
+                    if (self.has_adjacent(i, fields)) heuristics[i] += 1;
                 }
             }
             // Add +1 to the row or column for each occupied field -> XX__ = +2 for each
             // Row first
-            // for (0..self.game_size) |rid| {
-            //     const row_slice = self.fields[rid * self.game_size .. self.game_size * (rid + 1)];
-            //     const count = self.count_slice(row_slice);
+            for (0..self.game_size) |rid| {
+                const row_slice = fields[rid * self.game_size .. self.game_size * (rid + 1)];
+                const count = self.count_slice(row_slice);
 
-            //     const point_addition: u8 = @intCast(count[1] + count[2]);
+                const point_addition: u8 = @intCast(count[1] + count[2]);
 
-            //     for (0..self.game_size) |cid| {
-            //         if (row_slice[cid] == 0) {
-            //             heuristics[rid * self.game_size + cid] += point_addition;
-            //         }
-            //     }
-            // }
+                for (0..self.game_size) |cid| {
+                    if (row_slice[cid] == 0) {
+                        heuristics[rid * self.game_size + cid] += point_addition;
+                    }
+                }
+            }
 
             // Next columns
             for (0..self.game_size) |cid| {
-                const col_slice = self.pick_column(cid);
+                const col_slice = self.pick_column(cid, fields);
                 const count = self.count_slice(col_slice[0..self.game_size]);
 
                 const point_addition: u8 = @intCast(count[1] + count[2]);
@@ -300,27 +301,27 @@ fn Game(comptime size: usize) type {
             }
         }
 
-        fn has_adjacent(self: *Game(size), index: usize) bool {
+        fn has_adjacent(self: *Game(size), index: usize, fields: *[size * size]u8) bool {
             const row = index / self.game_size;
             const col = index % self.game_size;
 
             if (row > 0) {
-                if (self.fields[(row - 1) * self.game_size + col] != 0) {
+                if (fields[(row - 1) * self.game_size + col] != 0) {
                     return true;
                 }
             }
             if (row < self.game_size - 1) {
-                if (self.fields[(row + 1) * self.game_size + col] != 0) {
+                if (fields[(row + 1) * self.game_size + col] != 0) {
                     return true;
                 }
             }
             if (col > 0) {
-                if (self.fields[row * self.game_size + col - 1] != 0) {
+                if (fields[row * self.game_size + col - 1] != 0) {
                     return true;
                 }
             }
             if (col < self.game_size - 1) {
-                if (self.fields[row * self.game_size + col + 1] != 0) {
+                if (fields[row * self.game_size + col + 1] != 0) {
                     return true;
                 }
             }
@@ -328,16 +329,16 @@ fn Game(comptime size: usize) type {
             return false;
         }
 
-        fn solve_quota(self: *Game(size)) bool {
+        fn solve_quota(self: *Game(size), field: *[size * size]u8) bool {
             for (0..self.game_size) |rid| {
-                const row_slice = self.fields[rid * self.game_size .. rid * self.game_size + self.game_size];
+                const row_slice = field[rid * self.game_size .. rid * self.game_size + self.game_size];
                 const row_count = self.count_slice(row_slice);
                 if (row_count[1] >= self.game_size / 2 and row_count[0] >= 1) {
                     // std.debug.print("Fill in the rest of the ROW with RED (2) \n", .{});
                     for (0..self.game_size) |field_id| {
                         const index = rid * self.game_size + field_id;
-                        const value = self.fields[index];
-                        if (value == 0) self.fields[index] = 2;
+                        const value = field[index];
+                        if (value == 0) field[index] = 2;
                     }
                     return true;
                 }
@@ -346,8 +347,8 @@ fn Game(comptime size: usize) type {
                     // std.debug.print("Fill in the rest of the ROW with BLUE (1) \n", .{});
                     for (0..self.game_size) |field_id| {
                         const index = rid * self.game_size + field_id;
-                        const value = self.fields[index];
-                        if (value == 0) self.fields[index] = 1;
+                        const value = field[index];
+                        if (value == 0) field[index] = 1;
                     }
                     return true;
                 }
@@ -355,15 +356,15 @@ fn Game(comptime size: usize) type {
 
             // // Now, check columns
             for (0..self.game_size) |cid| {
-                const col_slice = self.pick_column(cid)[0..self.game_size];
+                const col_slice = self.pick_column(cid, field)[0..self.game_size];
                 const col_count = self.count_slice(col_slice);
 
                 if (col_count[1] >= self.game_size / 2 and col_count[0] >= 1) {
                     // std.debug.print("Fill in the rest of the COLUMN with RED (2) \n", .{});
                     for (0..self.game_size) |field_id| {
                         const index = field_id * self.game_size + cid;
-                        const value = self.fields[index];
-                        if (value == 0) self.fields[index] = 2;
+                        const value = field[index];
+                        if (value == 0) field[index] = 2;
                     }
                     return true;
                 }
@@ -372,8 +373,8 @@ fn Game(comptime size: usize) type {
                     // std.debug.print("Fill in the rest of the COLUMN with BLUE (1) \n", .{});
                     for (0..self.game_size) |field_id| {
                         const index = field_id * self.game_size + cid;
-                        const value = self.fields[index];
-                        if (value == 0) self.fields[index] = 1;
+                        const value = field[index];
+                        if (value == 0) field[index] = 1;
                     }
                     return true;
                 }
@@ -382,16 +383,16 @@ fn Game(comptime size: usize) type {
             return false;
         }
 
-        fn solve_consecutive(self: *Game(size)) bool {
+        fn solve_consecutive(self: *Game(size), fields: *[size * size]u8) bool {
             for (0..self.game_size) |rid| {
-                const row_slice = self.fields[rid * self.game_size .. rid * self.game_size + self.game_size];
+                const row_slice = fields[rid * self.game_size .. rid * self.game_size + self.game_size];
                 var last_value = row_slice[0];
                 for (1..row_slice.len) |s_idx| {
                     if (row_slice[s_idx] == last_value and last_value != 0 and s_idx + 1 < row_slice.len and row_slice[s_idx + 1] == 0) {
                         // Automatically assuming we have 2 of the same values in a row
                         const opposite_value = self.opposite(last_value);
                         if (s_idx + 2 <= self.game_size) {
-                            self.fields[rid * self.game_size + s_idx + 1] = opposite_value;
+                            fields[rid * self.game_size + s_idx + 1] = opposite_value;
                             return true;
                         }
                     } else {
@@ -404,7 +405,7 @@ fn Game(comptime size: usize) type {
                 var s_idx = row_slice.len - 2;
                 while (s_idx > 0) {
                     if (row_slice[s_idx] == last_value and last_value != 0 and s_idx - 1 >= 0 and row_slice[s_idx - 1] == 0) {
-                        self.fields[rid * self.game_size + (s_idx - 1)] = self.opposite(last_value);
+                        fields[rid * self.game_size + (s_idx - 1)] = self.opposite(last_value);
                         return true;
                     } else {
                         last_value = row_slice[s_idx];
@@ -415,7 +416,7 @@ fn Game(comptime size: usize) type {
 
             // // Now, check columns
             for (0..self.game_size) |cid| {
-                const col_slice = self.pick_column(cid)[0..self.game_size];
+                const col_slice = self.pick_column(cid, fields)[0..self.game_size];
                 var last_value = col_slice[0];
 
                 for (1..col_slice.len) |s_idx| {
@@ -423,7 +424,7 @@ fn Game(comptime size: usize) type {
                         // Automatically assuming we have 2 of the same values in a row
                         const opposite_value = self.opposite(last_value);
                         if (s_idx + 1 <= self.game_size) {
-                            self.fields[(s_idx + 1) * self.game_size + cid] = opposite_value;
+                            fields[(s_idx + 1) * self.game_size + cid] = opposite_value;
                             return true;
                         }
                     } else {
@@ -436,7 +437,7 @@ fn Game(comptime size: usize) type {
                 var s_idx = col_slice.len - 2;
                 while (s_idx > 0) {
                     if (col_slice[s_idx] == last_value and last_value != 0 and s_idx - 1 >= 0 and col_slice[s_idx - 1] == 0) {
-                        self.fields[(s_idx - 1) * self.game_size + cid] = self.opposite(col_slice[s_idx]);
+                        fields[(s_idx - 1) * self.game_size + cid] = self.opposite(col_slice[s_idx]);
                         return true;
                     } else {
                         last_value = col_slice[s_idx];
@@ -448,9 +449,9 @@ fn Game(comptime size: usize) type {
             return false;
         }
 
-        fn solve_sandwich(self: *Game(size)) bool {
+        fn solve_sandwich(self: *Game(size), fields: *[size * size]u8) bool {
             for (0..self.game_size) |rid| {
-                var row_slice = self.fields[rid * self.game_size .. rid * self.game_size + self.game_size];
+                var row_slice = fields[rid * self.game_size .. rid * self.game_size + self.game_size];
 
                 for (0..self.game_size - 2) |s_idx| {
                     if (row_slice[s_idx] != 0 and row_slice[s_idx + 1] == 0 and row_slice[s_idx + 2] == row_slice[s_idx]) {
@@ -462,13 +463,13 @@ fn Game(comptime size: usize) type {
 
             // Now, check columns
             for (0..self.game_size) |cid| {
-                const col_slice = self.pick_column(cid)[0..self.game_size];
+                const col_slice = self.pick_column(cid, fields)[0..self.game_size];
 
                 for (0..self.game_size - 2) |s_idx| {
                     // _ = s_idx;
 
                     if (col_slice[s_idx] != 0 and col_slice[s_idx + 1] == 0 and col_slice[s_idx + 2] == col_slice[s_idx]) {
-                        self.fields[(s_idx + 1) * self.game_size + cid] = self.opposite(col_slice[s_idx]);
+                        fields[(s_idx + 1) * self.game_size + cid] = self.opposite(col_slice[s_idx]);
                         return true;
                     }
                 }
@@ -477,48 +478,48 @@ fn Game(comptime size: usize) type {
             return false;
         }
 
-        fn map_state(self: *Game(size)) u64 {
-            return std.hash.Wyhash.hash(0, &self.fields);
+        fn map_hash(self: *Game(size), field: *[size * size]u8) u64 {
+            _ = self;
+            return std.hash.Wyhash.hash(0, field);
         }
 
-        pub fn solve(self: *Game(size)) !void {
-            _ = try self.print_fields();
-            var last_state = self.map_state();
+        pub fn solve(self: *Game(size), fields: *[size * size]u8) !bool {
+            var last_state = self.map_hash(fields);
 
             var ch: u8 = 1;
             var fail_row: usize = 0;
 
             var guess_state: [size * size]u8 = undefined;
-            @memcpy(&guess_state, &self.fields);
+            @memcpy(&guess_state, fields);
 
-            while (!try self.is_solved()) : (if (!try self.verify()) {
+            while (!try self.is_solved(fields)) : (if (!try self.verify(fields)) {
                 ch = self.opposite(ch);
-                @memcpy(&self.fields, &guess_state);
+                @memcpy(fields, &guess_state);
                 fail_row += 1;
             }) {
                 if (fail_row > 3) {
                     std.debug.print("Failed more than 3 times in a row. Unsolvable layout?\n", .{});
-                    break;
+                    return false;
                 }
 
                 std.debug.print("---------------------- {d}\n", .{last_state});
-                _ = try self.print_fields();
+                _ = try self.print_fields(fields);
                 // RULE 1: Search for a finished quota; eg. where red = N/2 or blue = N/2
-                if (self.solve_quota()) continue;
+                if (self.solve_quota(fields)) continue;
 
                 // RULE 2: Search for consecutive XX or OO
-                if (self.solve_consecutive()) {
+                if (self.solve_consecutive(fields)) {
                     std.debug.print("Solve_Consecutive \n", .{});
                     continue;
                 }
 
                 // RULE 2.5: Check for sandwiches (X_X, O_O)
-                if (self.solve_sandwich()) continue;
+                if (self.solve_sandwich(fields)) continue;
 
                 var highest_val: usize = 0;
                 var highest_indexes_count: usize = 0;
                 var highest_indexes: [16]usize = undefined;
-                for (self.generate_heuristics(), 0..std.math.pow(usize, size, 2)) |field, i| {
+                for (self.generate_heuristics(fields), 0..std.math.pow(usize, size, 2)) |field, i| {
                     if (field > highest_val) {
                         highest_val = field;
                         highest_indexes[0] = i;
@@ -532,23 +533,24 @@ fn Game(comptime size: usize) type {
                 }
 
                 // For now, always set it to 1(O)
-                @memcpy(&guess_state, &self.fields);
+                @memcpy(&guess_state, fields);
                 const selected_field = self.random.intRangeAtMost(usize, 0, highest_indexes_count - 1);
-                self.fields[highest_indexes[selected_field]] = ch;
+                fields[highest_indexes[selected_field]] = ch;
 
                 print_usize_slice(highest_indexes[0..]);
                 std.debug.print("{d}", .{selected_field});
 
-                if (last_state == self.map_state()) {
+                if (last_state == self.map_hash(fields)) {
                     std.debug.print("No change deteceted, exiting... \n", .{});
                     break;
                 }
 
-                last_state = self.map_state();
+                last_state = self.map_hash(fields);
             }
 
             std.debug.print("----------------------\n", .{});
-            _ = try self.print_fields();
+            _ = try self.print_fields(fields);
+            return true;
         }
 
         // fn count_col(self: *Game(size), cid: usize) struct { blue: usize, red: usize } {}
@@ -558,23 +560,37 @@ fn Game(comptime size: usize) type {
             return (val ^ 0b11);
         }
 
-        pub fn verify(self: *Game(size)) !bool {
-            if (!try self.verify_count_rule()) {
+        pub fn verify(self: *Game(size), fields: *[size * size]u8) !bool {
+            if (!try self.verify_count_rule(fields)) {
                 std.debug.print("More than 2 tiles next to each other! Fail\n", .{});
                 return false;
             }
 
-            if (!try self.verify_balance_rule()) {
+            if (!try self.verify_balance_rule(fields)) {
                 std.debug.print("More than N/2 tiles in a row or column! Fail\n", .{});
                 return false;
             }
 
-            if (!try self.verify_no_duplicates()) {
+            if (!try self.verify_no_duplicates(fields)) {
                 std.debug.print("More than 1 instance of a row or column! Fail\n", .{});
                 return false;
             }
 
             return true;
+        }
+
+        pub fn carve(self: *Game(size), fields: *[std.math.pow(usize, size, 2)]u8) void {
+            _ = self;
+
+            // Basic algorithm: Select a random field, remove it, solve the puzzle and if it succeeds, remove another field and repeat.
+            // If it fails, keep that field locked forever.
+
+            for (0..self.game_size) |value| {
+                const work_fields: [std.math.pow(usize, size, 2)]u8 = undefined;
+                @memcpy(&test_field, fields);
+
+                const random_field_to_remove = self.random.intRangeAtMost(usize, 0, self.game_size - value);
+            }
         }
     };
 }
@@ -652,6 +668,22 @@ test "Verify no duplicates rule" {
 }
 
 test "Solve" {
+    const io = std.testing.io;
+
+    // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
+    const now = std.Io.Clock.Timestamp.now(io, .real);
+    const secs = now.raw.toMicroseconds();
+
+    const MyGame = Game(6);
+    var game: MyGame = MyGame.init(@intCast(secs));
+    try game.test_field();
+    _ = try game.solve(&game.fields);
+    const success = try game.verify(&game.fields);
+
+    try std.testing.expect(success);
+}
+
+test "Carving" {
     const io = std.testing.io;
 
     // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
