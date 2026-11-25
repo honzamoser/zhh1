@@ -28,7 +28,17 @@ fn Game(comptime size: usize) type {
 
         pub fn test_field(self: *Game(size)) !void {
             // zig fmt: off
+            // self.*.fields = [_]u8 {
+            //     1,0,0,0,0,2,
+            //     2,1,2,2,1,1,
+            //     2,2,1,1,2,1,
+            //     1,0,2,1,0,2,
+            //     1,0,0,2,0,0,
+            //     2,2,1,0,0,1
+            // };
+
             self.*.fields = @splat(0);
+
             // zig fmt: on
 
             // const is_count_valid = self.verify_count_rule() catch |err| {
@@ -286,7 +296,7 @@ fn Game(comptime size: usize) type {
                     }
                 }
             }
-            self.print_heuristic(heuristics);
+            // self.print_heuristic(heuristics);
             return heuristics;
         }
 
@@ -478,9 +488,118 @@ fn Game(comptime size: usize) type {
             return false;
         }
 
+        fn solve_doubles(self: *Game(size), fields: *[size * size]u8) bool {
+            // Check each row and column. Only continue if row / col has N - 2 occupied values
+            // If it does, check each row / col that has N occupied values if the occupied values on the OG has the same values
+            // If it does, get the 2 missing values and set them to the opposite of the src values
+
+            // Rows first:
+            for (0..self.game_size) |rid| {
+                const row_slice = fields[rid * self.game_size .. (rid + 1) * self.game_size];
+                const count = self.count_slice(row_slice);
+
+                // std.debug.print("Checking doubles for row: {d} \n", .{rid});
+
+                if (count[0] == 2) {
+                    // Check every other row if
+                    for (0..self.game_size - 1) |crid| {
+                        const current_row = if (crid >= rid) crid + 1 else crid;
+                        const current_count = self.count_slice(fields[current_row * self.game_size .. (current_row + 1) * self.game_size]);
+                        if (current_count[0] > 0) continue;
+                        var fail = false;
+                        for (0..self.game_size) |cid| {
+                            const value = fields[current_row * self.game_size + cid];
+                            // std.debug.print("{d} ^ {d} = {d}\n", .{ value, row_slice[cid], value ^ row_slice[cid] });
+                            if (value ^ row_slice[cid] == 3) {
+                                fail = true;
+                                break;
+                            }
+                        }
+                        if (fail) continue;
+                        // std.debug.print("Found match! replace and return;", .{});
+                        for (0..self.game_size) |cid| {
+                            const value = fields[current_row * self.game_size + cid];
+                            // std.debug.print("{d} ^ {d} = {d}\n", .{ value, row_slice[cid], value ^ row_slice[cid] });
+                            if (row_slice[cid] == 0) {
+                                row_slice[cid] = self.opposite(value);
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+
+            // Cols:
+            for (0..self.game_size) |cid| {
+                const col_slice = self.pick_column(cid, fields)[0..self.game_size];
+                const count = self.count_slice(col_slice);
+
+                if (count[0] == 2) {
+                    for (0..self.game_size - 1) |ccid| {
+                        const current_col = if (ccid >= cid) ccid + 1 else ccid;
+                        const check_col_slice = self.pick_column(ccid, fields);
+                        const current_count = self.count_slice(&check_col_slice);
+
+                        if (current_count[0] > 0) continue;
+
+                        var fail = false;
+                        for (0..self.game_size) |rid| {
+                            const row_value = fields[current_col + rid * self.game_size];
+                            if (row_value ^ col_slice[rid] == 3) {
+                                fail = true;
+                                break;
+                            }
+                        }
+
+                        if (fail) continue;
+
+                        for (0..self.game_size) |rid| {
+                            const row_value = fields[current_col + rid * self.game_size];
+                            if (col_slice[rid] == 0) {
+                                fields[rid * self.game_size + cid] = self.opposite(row_value);
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         fn map_hash(self: *Game(size), field: *[size * size]u8) u64 {
             _ = self;
             return std.hash.Wyhash.hash(0, field);
+        }
+
+        fn solve_no_guess(self: *Game(size), fields: *[size * size]u8) !bool {
+            var last_state: u64 = self.map_hash(fields);
+
+            while (!try self.is_solved(fields)) : (last_state = self.map_hash(fields)) {
+
+                // std.debug.print("---------------------- {d}\n", .{last_state});
+                // _ = try self.print_fields(fields);
+                // RULE 1: Search for a finished quota; eg. where red = N/2 or blue = N/2
+                if (self.solve_quota(fields)) continue;
+
+                // RULE 2: Search for consecutive XX or OO
+                if (self.solve_consecutive(fields)) {
+                    // std.debug.print("Solve_Consecutive \n", .{});
+                    continue;
+                }
+
+                // RULE 2.5: Check for sandwiches (X_X, O_O)
+                if (self.solve_sandwich(fields)) continue;
+
+                // RULE 3: Look for columns that match an existing column - 2 elements, and put the opposites of the missing elements
+                if (self.solve_doubles(fields)) continue;
+
+                return false;
+            }
+
+            // std.debug.print("---------------------- {d}\n", .{last_state});
+            // _ = try self.print_fields(fields);
+            return true;
         }
 
         pub fn solve(self: *Game(size), fields: *[size * size]u8) !bool {
@@ -488,6 +607,7 @@ fn Game(comptime size: usize) type {
 
             var ch: u8 = 1;
             var fail_row: usize = 0;
+            var solver_message: [:0]const u8 = "";
 
             var guess_state: [size * size]u8 = undefined;
             @memcpy(&guess_state, fields);
@@ -496,25 +616,41 @@ fn Game(comptime size: usize) type {
                 ch = self.opposite(ch);
                 @memcpy(fields, &guess_state);
                 fail_row += 1;
+                std.debug.print("Reverting last guess \n", .{});
             }) {
+                last_state = self.map_hash(fields);
+
                 if (fail_row > 3) {
                     std.debug.print("Failed more than 3 times in a row. Unsolvable layout?\n", .{});
                     return false;
                 }
 
-                std.debug.print("---------------------- {d}\n", .{last_state});
+                std.debug.print("---------------------- {d} - {s}\n", .{ last_state, solver_message });
                 _ = try self.print_fields(fields);
+                solver_message = "";
                 // RULE 1: Search for a finished quota; eg. where red = N/2 or blue = N/2
-                if (self.solve_quota(fields)) continue;
+                if (self.solve_quota(fields)) {
+                    solver_message = "Solved by quota";
+                    continue;
+                }
 
                 // RULE 2: Search for consecutive XX or OO
                 if (self.solve_consecutive(fields)) {
-                    std.debug.print("Solve_Consecutive \n", .{});
+                    solver_message = "Solved by consecutive";
                     continue;
                 }
 
                 // RULE 2.5: Check for sandwiches (X_X, O_O)
-                if (self.solve_sandwich(fields)) continue;
+                if (self.solve_sandwich(fields)) {
+                    solver_message = "Solved by sandwich";
+                    continue;
+                }
+
+                // RULE 3: Check for similiar rows and fill in
+                if (self.solve_doubles(fields)) {
+                    solver_message = "Solved by doubles";
+                    continue;
+                }
 
                 var highest_val: usize = 0;
                 var highest_indexes_count: usize = 0;
@@ -537,18 +673,15 @@ fn Game(comptime size: usize) type {
                 const selected_field = self.random.intRangeAtMost(usize, 0, highest_indexes_count - 1);
                 fields[highest_indexes[selected_field]] = ch;
 
-                print_usize_slice(highest_indexes[0..]);
-                std.debug.print("{d}", .{selected_field});
+                solver_message = "Solved by guessing";
 
                 if (last_state == self.map_hash(fields)) {
                     std.debug.print("No change deteceted, exiting... \n", .{});
                     break;
                 }
-
-                last_state = self.map_hash(fields);
             }
 
-            std.debug.print("----------------------\n", .{});
+            std.debug.print("--------FINAL--------- {d}\n", .{self.map_hash(fields)});
             _ = try self.print_fields(fields);
             return true;
         }
@@ -579,18 +712,39 @@ fn Game(comptime size: usize) type {
             return true;
         }
 
-        pub fn carve(self: *Game(size), fields: *[std.math.pow(usize, size, 2)]u8) void {
-            _ = self;
+        pub fn carve(self: *Game(size), fields: *[std.math.pow(usize, size, 2)]u8) !void {
+            // _ = self;
 
             // Basic algorithm: Select a random field, remove it, solve the puzzle and if it succeeds, remove another field and repeat.
             // If it fails, keep that field locked forever.
 
-            for (0..self.game_size) |value| {
-                const work_fields: [std.math.pow(usize, size, 2)]u8 = undefined;
-                @memcpy(&test_field, fields);
+            var work_fields: [std.math.pow(usize, size, 2)]u8 = undefined;
+            @memcpy(&work_fields, fields);
 
-                const random_field_to_remove = self.random.intRangeAtMost(usize, 0, self.game_size - value);
+            const random_offset = self.random.intRangeAtMost(usize, 0, self.game_size);
+            // const random_offset = 0;
+
+            // const removed_fields_amt = 0;
+            // const removed_fields: [size * size]u8 = undefined;
+
+            std.debug.print("Carving...\n", .{});
+
+            for (0..self.game_size * self.game_size) |value| {
+                const i = (value + random_offset) % (self.game_size * self.game_size);
+                var op_field: [size * size]u8 = undefined;
+                @memcpy(&op_field, &work_fields);
+
+                op_field[i] = 0;
+                const solvable = try self.solve_no_guess(&op_field);
+
+                // try self.print_fields(&op_field);
+
+                if (solvable) {
+                    work_fields[i] = 0;
+                }
             }
+
+            try self.print_fields(&work_fields);
         }
     };
 }
@@ -608,7 +762,7 @@ fn print_slice(slice: []const u8) void {
     for (slice) |value| {
         std.debug.print("{d}, ", .{value});
     }
-    std.debug.print("]", .{});
+    std.debug.print("]\n", .{});
 }
 
 pub fn fmt_row(input: []const u8, out_buf: []u8) !void {
@@ -667,7 +821,7 @@ test "Verify no duplicates rule" {
     try std.testing.expect(is_no_duplicates_valid);
 }
 
-test "Solve" {
+test "Solve with guessing" {
     const io = std.testing.io;
 
     // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
@@ -683,7 +837,7 @@ test "Solve" {
     try std.testing.expect(success);
 }
 
-test "Carving" {
+test "Solve without guessing" {
     const io = std.testing.io;
 
     // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
@@ -693,10 +847,37 @@ test "Carving" {
     const MyGame = Game(6);
     var game: MyGame = MyGame.init(@intCast(secs));
     try game.test_field();
-    try game.solve();
-    const success = try game.verify();
+    _ = try game.solve_no_guess(&game.fields);
+    const success = try game.verify(&game.fields);
 
     try std.testing.expect(success);
+}
+
+test "Carving" {
+    const io = std.testing.io;
+
+    // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
+    const now = std.Io.Clock.Timestamp.now(io, .real);
+    const us = now.raw.toMicroseconds();
+
+    const MyGame = Game(6);
+    var game: MyGame = MyGame.init(@intCast(us));
+
+    var success = false;
+
+    while (!success) {
+        try game.test_field();
+        success = try game.solve(&game.fields);
+    }
+
+    try std.testing.expect(success);
+
+    try game.carve(&game.fields);
+
+    const finished = std.Io.Clock.Timestamp.now(io, .real);
+    const finished_us = finished.raw.toMicroseconds();
+
+    std.debug.print("Carving finished in {d}ms \n", .{@divFloor((finished_us - us), 1000)});
 }
 
 test "Opposite" {
