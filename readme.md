@@ -2,7 +2,7 @@
 
 A 0h h1 engine written in Zig. 
 
-A no-AI escapde for relaxing.
+A no-AI escapade for relaxing.
 
 WIP.
 
