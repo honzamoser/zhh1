@@ -24,15 +24,55 @@ pub fn main(init: std.process.Init) !void {
         else => error.IoctlError,
     };
 
+    const stdin_fd = std.Io.File.stdin().handle;
+    const termios_save = try std.posix.tcgetattr(stdin_fd);
+    var input_mode = termios_save;
+    input_mode.lflag.ICANON = false;
+    input_mode.lflag.ECHO = false;
+    try std.posix.tcsetattr(stdin_fd, .NOW, input_mode);
+
+    defer {
+        std.posix.tcsetattr(stdin_fd, .NOW, termios_save) catch {
+            std.debug.print("Failed to reset terminal\n", .{});
+        };
+    }
+
     // _ = init;
 
     var buffer: [1024]u8 = undefined;
     var buffered = std.Io.File.stdout().writerStreaming(init.io, &buffer);
-    const interface = &buffered.interface;
+    const stdout_interface = &buffered.interface;
 
-    try print_title(interface, init.gpa);
+    try print_title(stdout_interface, init.gpa);
+
+    var stdin_buffer: [1024]u8 = undefined;
+    var stdin = std.Io.File.stdin().reader(init.io, &stdin_buffer);
+    const stdin_interface = &stdin.interface;
+
+    const terminal_size = try get_terminal_size(stdout_interface, stdin_interface);
+
+    std.debug.print("Terminal size is {d}x{d}\n", .{ terminal_size[0], terminal_size[1] });
 }
 
+fn get_terminal_size(writer_interface: *std.Io.Writer, reader_interface: *std.Io.Reader) ![2]u16 {
+    try writer_interface.writeAll("\x1b[6n");
+    try writer_interface.flush();
+    const x = try reader_interface.takeDelimiterExclusive('R');
+
+    const coordinates = x[2..];
+
+    var split = std.mem.splitAny(u8, coordinates, &[_]u8{';'});
+
+    var out: [2]u16 = undefined;
+
+    var i: u16 = 0;
+    while (split.next()) |num| {
+        std.debug.print("{s}\n", .{num});
+        out[i] = std.fmt.parseInt(u16, num, 10) catch 0;
+        i += 1;
+    }
+    return out;
+}
 fn print_title(interface: *std.Io.Writer, allocator: std.mem.Allocator) !void {
     try interface.writeAll("\x1b[0m\x1b[1m");
 
@@ -47,7 +87,7 @@ fn print_title(interface: *std.Io.Writer, allocator: std.mem.Allocator) !void {
 
     allocator.free(title_offset);
 
-    try interface.flush();
+    // try interface.flush();
 }
 
 inline fn offset(width: usize, content_size: usize, allocator: std.mem.Allocator) []const u8 {
