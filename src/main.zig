@@ -54,20 +54,136 @@ fn program_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, init: std.process
 
     switch (menu_selection) {
         .Play => {
-            try stdout.writeAll("\x1b[2J");
-            try game_loop(stdin, stdout, init.arena.allocator());
+            try stdout.writeAll("\x1b[2J\x1b[0m");
+            try game_loop(stdin, stdout, init.arena.allocator(), init.io);
         },
         .Options => {},
     }
 }
 
-fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.Allocator) !void {
-    _ = stdin;
-    _ = allocator;
-    try stdout.writeAll("gqame mode!!!");
+const selected_game_size = 16;
+
+fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.Allocator, io: std.Io) !void {
+    // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
+    const now = std.Io.Clock.Timestamp.now(io, .real);
+    const us = now.raw.toMicroseconds();
+
+    const MyGame = zhh1.Game(selected_game_size);
+    var game: MyGame = MyGame.init(@intCast(us));
+
+    var success = false;
+
+    while (!success) {
+        try game.test_field();
+        success = try game.solve(&game.fields);
+    }
+
+    var carved_field = try allocator.alloc(u8, game.game_size * game.game_size);
+
+    try game.carve(&game.fields, carved_field[0..(selected_game_size * selected_game_size)]);
+    @memcpy(&game.fields, carved_field);
+
+    var cursor_position = [2]usize{ 2, 2 };
+
+    var out_buf: [2048]u8 = undefined;
+    var written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
+
+    try stdout.writeAll(out_buf[0..written]);
     try stdout.flush();
 
-    while (true) {}
+    while (true) {
+        const b = try stdin.takeByte();
+        if (b == 0x1b) {
+            const sb = try stdin.takeByte();
+            const tb = try stdin.takeByte();
+
+            if (sb == '[' or sb == 'O') {
+                switch (tb) {
+                    'A' => {
+                        cursor_position[0] = neg_modulo(usize, cursor_position[0], 1, game.game_size - 1);
+                    },
+                    'B' => {
+                        cursor_position[0] = (cursor_position[0] + 1) % game.game_size;
+                    },
+                    'C' => {
+                        cursor_position[1] = (cursor_position[1] + 1) % game.game_size;
+                    },
+                    'D' => {
+                        cursor_position[1] = neg_modulo(usize, cursor_position[1], 1, game.game_size - 1);
+                    },
+                    else => {},
+                }
+            }
+
+            written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
+            try clear_terminal(stdout);
+            try stdout.writeAll(out_buf[0..written]);
+            try stdout.flush();
+        } else if (b == 0x20) {
+            var val = game.fields[cursor_position[0] * game.game_size + cursor_position[1] .. cursor_position[0] * game.game_size + cursor_position[1] + 1];
+
+            if (val[0] == 0) {
+                val[0] = 1;
+            } else if (val[0] == 1) {
+                val[0] = 2;
+            } else if (val[0] == 2) {
+                val[0] = 0;
+            }
+            written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
+            try clear_terminal(stdout);
+            try stdout.writeAll(out_buf[0..written]);
+            try stdout.flush();
+
+            if (try game.is_solved(&game.fields)) {
+                try clear_terminal(stdout);
+
+                const finished_ts = std.Io.Clock.Timestamp.now(io, .real);
+                const finished_us = finished_ts.raw.toMicroseconds();
+
+                try stdout.print("Ojoo! Finished in {d}s\n", .{@divFloor((finished_us - us), 1_000_000)});
+                try stdout.flush();
+
+                std.process.exit(0);
+            }
+        } else {
+            // std.debug.print("{x}", .{b});
+        }
+    }
+
+    std.process.exit(0);
+}
+
+fn clear_terminal(stdout: *std.Io.Writer) !void {
+    try stdout.writeAll("\x1b[2J");
+}
+
+fn render_game_state(fields: []u8, game_size: usize, allocator: std.mem.Allocator, cursor_position: *[2]usize, out_buf: []u8) !usize {
+    const field_size = game_size * 2 - 1;
+    const field_offset = offset(terminal_width, field_size, allocator);
+
+    var writer: std.Io.Writer = .fixed(out_buf);
+
+    for (0..game_size) |row| {
+        try writer.writeAll(field_offset);
+        for (0..game_size) |col| {
+            const char_to_print: u8 = switch (fields[row * game_size + col]) {
+                0 => '_',
+                1 => 'O',
+                2 => 'X',
+                else => '?',
+            };
+            if (row == cursor_position[0] and col == cursor_position[1]) {
+                try writer.writeAll("\x1b[44m");
+                try writer.print("{c}", .{char_to_print});
+                try writer.writeAll("\x1b[49m ");
+            } else {
+                try writer.print("{c} ", .{char_to_print});
+            }
+        }
+        try writer.writeAll("\n");
+    }
+
+    return writer.end;
 }
 
 fn menu_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.Allocator) !MenuReturnState {
@@ -152,9 +268,14 @@ fn menu_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
     }
 }
 
-fn clamp_minus(a: u16, b: u16) u16 {
+fn clamp_minus(comptime T: type, a: T, b: T) T {
     if (b > a) return 0;
     return a - b;
+}
+
+fn neg_modulo(comptime T: type, a: T, b: T, m: T) T {
+    if (b > a) return m;
+    return (a - b) % m;
 }
 
 fn get_terminal_cursor_position(stdout: *std.Io.Writer, stdin: *std.Io.Reader) ![2]u16 {
