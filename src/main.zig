@@ -92,6 +92,8 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
     try stdout.writeAll(out_buf[0..written]);
     try stdout.flush();
 
+    var error_message: [1024]u8 = @splat(0);
+
     while (true) {
         const b = try stdin.takeByte();
         if (b == 0x1b) {
@@ -119,6 +121,10 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
             written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
             try stdout.print("\x1b[{d};{d}H", .{ terminal_height / 2 - game.game_size, 0 });
             try stdout.writeAll(out_buf[0..written]);
+            if (std.mem.indexOfScalar(u8, &error_message, 0)) |len| {
+                const message = error_message[0..len];
+                try stdout.writeAll(message);
+            }
             try stdout.flush();
         } else if (b == 0x20) {
             var val = game.fields[cursor_position[0] * game.game_size + cursor_position[1] .. cursor_position[0] * game.game_size + cursor_position[1] + 1];
@@ -133,19 +139,44 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
             written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
             try stdout.print("\x1b[{d};{d}H", .{ terminal_height / 2 - game.game_size, 0 });
             try stdout.writeAll(out_buf[0..written]);
-            try stdout.flush();
 
-            if (try game.is_solved(&game.fields)) {
-                // try clear_terminal(stdout);
+            if (game.verify(&game.fields)) |_| {
+                if (try game.is_solved(&game.fields)) {
+                    // try clear_terminal(stdout);
 
-                const finished_ts = std.Io.Clock.Timestamp.now(io, .real);
-                const finished_us = finished_ts.raw.toMicroseconds();
+                    const finished_ts = std.Io.Clock.Timestamp.now(io, .real);
+                    const finished_us = finished_ts.raw.toMicroseconds();
 
-                try stdout.print("Ojoo! Finished in {d}s\n", .{@divFloor((finished_us - us), 1_000_000)});
-                try stdout.flush();
+                    try stdout.print("Ojoo! Finished in {d}s\n", .{@divFloor((finished_us - us), 1_000_000)});
+                    try stdout.flush();
 
-                std.process.exit(0);
+                    std.process.exit(0);
+                }
+
+                error_message = @splat(0);
+            } else |e| {
+                switch (e) {
+                    error.count => {
+                        const message = "More than N/2 in a row!";
+                        @memcpy(error_message[0..message.len], message);
+                        error_message[message.len] = 0;
+                    },
+                    else => {},
+                }
             }
+
+            if (std.mem.indexOfScalar(u8, &error_message, 0)) |len| {
+                const message = error_message[0..len];
+                const err_offset = offset(terminal_width, len, allocator);
+                defer allocator.free(err_offset);
+                try stdout.print("\n{s}", .{err_offset});
+                if (len == 0) {
+                    try stdout.writeAll("\x1b[2K");
+                } else {
+                    try stdout.writeAll(message);
+                }
+            }
+            try stdout.flush();
         } else {
             // std.debug.print("{x}", .{b});
         }
