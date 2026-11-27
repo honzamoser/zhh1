@@ -61,7 +61,7 @@ fn program_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, init: std.process
     }
 }
 
-const selected_game_size = 16;
+const selected_game_size = 4;
 
 fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.Allocator, io: std.Io) !void {
     // .real is Unix time: nanoseconds since 1970-01-01T00:00:00Z.
@@ -88,6 +88,7 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
     var out_buf: [2048]u8 = undefined;
     var written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
 
+    try stdout.print("\x1b[{d};{d}H", .{ terminal_height / 2 - game.game_size, 0 });
     try stdout.writeAll(out_buf[0..written]);
     try stdout.flush();
 
@@ -116,7 +117,7 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
             }
 
             written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
-            try clear_terminal(stdout);
+            try stdout.print("\x1b[{d};{d}H", .{ terminal_height / 2 - game.game_size, 0 });
             try stdout.writeAll(out_buf[0..written]);
             try stdout.flush();
         } else if (b == 0x20) {
@@ -130,12 +131,12 @@ fn game_loop(stdin: *std.Io.Reader, stdout: *std.Io.Writer, allocator: std.mem.A
                 val[0] = 0;
             }
             written = try render_game_state(&game.fields, game.game_size, allocator, &cursor_position, out_buf[0..]);
-            try clear_terminal(stdout);
+            try stdout.print("\x1b[{d};{d}H", .{ terminal_height / 2 - game.game_size, 0 });
             try stdout.writeAll(out_buf[0..written]);
             try stdout.flush();
 
             if (try game.is_solved(&game.fields)) {
-                try clear_terminal(stdout);
+                // try clear_terminal(stdout);
 
                 const finished_ts = std.Io.Clock.Timestamp.now(io, .real);
                 const finished_us = finished_ts.raw.toMicroseconds();
